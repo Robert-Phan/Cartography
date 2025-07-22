@@ -1,92 +1,17 @@
 import csv
-from typing import cast, Sequence
+from typing import cast
 import xml.etree.ElementTree as ET
-from svgpathtools import svg2paths2, parse_path, Path
-import numpy as np
+from svgpathtools import parse_path
 import math
-from pprint import pp, pprint
 import copy
-
-type Table[T] = list[list[T]]
-
-def convert_value(cell: str) -> int | str | None:
-    cell = cell.strip()
-    if cell == '':
-        return None
-    try:
-        return int(cell)
-    except ValueError:
-        return cell
-
-def csv_to_typed_list(path: str) -> Table[int | str | None]:
-    with open(path, 'r', newline='', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        return [[convert_value(cell) for cell in row] for row in reader]
-
-data = csv_to_typed_list('ev.csv')
-
-states_title = cast(list[str], data[0])
-table = cast(Table[int | None], data[1:])
-
-def apportionment_to_dicts(
-    state_abbrs: list[str],
-    data: list[list[int | None]]
-) -> list[dict[str, int]]:
-    return [
-        {state: val for state, val in zip(state_abbrs, row) if val is not None}
-        for row in data
-    ]
-
-apportionment_dictionary = apportionment_to_dicts(states_title, table)
+from ev_dict import create_ev_dict
+from centroid_and_area import compute_svg_areas, path_centroid, centroid_of_path_element
+import re
 
 INPUT = "1968.svg"
 NTH_APP = 23
-print(len(apportionment_dictionary))
 
-id_to_ev: dict[str, int] = apportionment_dictionary[NTH_APP]   
-
-def compute_svg_areas(input_svg: str) -> dict[str, float]:
-    """
-    Parse `input_svg` and return a mapping from each element ID
-    (<path> or <g>) to the sum of its path‐areas.
-    """
-    ET.register_namespace('', 'http://www.w3.org/2000/svg')
-    tree = ET.parse(input_svg)
-    root = tree.getroot()
-    ns   = {'svg': 'http://www.w3.org/2000/svg'}
-
-    # Preserve the SVG namespace
-    def area_of_path_d(d: str) -> float:
-        full = parse_path(d)
-        total = 0.0
-        for sub in full.continuous_subpaths():
-            # only count subpaths that close on themselves
-            if abs(sub.start - sub.end) < 1e-6:
-                total += abs(sub.area())
-        return total
-
-    id_to_area: dict[str, float] = {}
-
-    # standalone <path>
-    for el in root.findall('.//svg:path', ns):
-        pid = el.get('id')
-        d   = el.get('d')
-        if pid and d:
-            id_to_area[pid] = area_of_path_d(d)
-
-    # <g> groups
-    for g in root.findall('.//svg:g', ns):
-        gid = g.get('id')
-        if not gid:
-            continue
-        total = 0.0
-        for el in g.findall('.//svg:path', ns):
-            d = el.get('d')
-            if d:
-                total += area_of_path_d(d)
-        id_to_area[gid] = total
-
-    return id_to_area
+id_to_ev = create_ev_dict(NTH_APP)
 
 def get_scales(id_to_area: dict[str, float], ev_dict: dict[str, int]):
     max_scale = 0
@@ -137,8 +62,13 @@ def scale_svg(input_svg: str,
                 continue
 
             path = parse_path(d)
-            xmin, xmax, ymin, ymax = path.bbox()
-            cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
+            # xmin, xmax, ymin, ymax = path.bbox()
+            # cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
+            # centroid = path_centroid(path)
+            centroid = centroid_of_path_element(path)
+            if not centroid:
+                continue
+            cx, cy = centroid.real, centroid.imag
 
             t = f"translate({cx},{cy}) scale({s}) translate({-cx},{-cy})"
             existing = path_el.get('transform', '')
@@ -157,8 +87,8 @@ def scale_svg(input_svg: str,
 
         path_el_copy = copy.deepcopy(path_el)
         path_el_copy.set('stroke-width', '0.5')
-        path_el_copy.set('stroke', 'grey')
-        path_el_copy.set('fill', 'none')
+        path_el_copy.set('stroke', '#4772b8')
+        path_el_copy.set('fill', '#edf1f8')
         path_el_copy.set('id', path_id + 'c')
 
         outline_el = root.find(".//svg:*[@id='outlines']", namespaces=ns)
@@ -166,38 +96,19 @@ def scale_svg(input_svg: str,
             outline_el.insert(0, path_el_copy)
 
         path = parse_path(d)
-        xmin, xmax, ymin, ymax = path.bbox()
-        cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
+        centroid = centroid_of_path_element(path)
+        if not centroid:
+            continue
+
+        cx, cy = centroid.real, centroid.imag
 
         t = f"translate({cx},{cy}) scale({s}) translate({-cx},{-cy})"
         existing = path_el.get('transform', '')
         path_el.set('transform', f"{existing} {t}".strip())
-
-    # 4. Move states
-    # for path_el in root.findall('.//svg:path', ns):
-    #     path_id = path_el.get('id')
-    #     if path_id not in id_to_scale:
-    #         continue
-        
-    #     s = id_to_scale[path_id]
-    #     d = path_el.get('d')
-    #     if not d:
-    #         continue
-
-    #     path = parse_path(d)
-    #     xmin, xmax, ymin, ymax = path.bbox()
-    #     cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
-
-    #     movement_proportion = 0.25
-    #     print(path_id, movement_proportion)
-
-    #     dx = ((centerpiece_x - cx) * movement_proportion) 
-    #     dy = ((centerpiece_y - cy) * movement_proportion)
-    #     print(dx, dy)
-
-    #     t = f"translate({dx},{dy})"
-    #     existing = path_el.get('transform', '')
-    #     path_el.set('transform', f"{t} {existing}".strip())
+        path_el.set('fill', '#4772b8')
+        path_el.set('stroke-width', '0.5')
+        path_el.set('stroke', '#325081')
+        path_el.set('vector-effect', 'non-scaling-stroke')
 
         #3. Adjust text
         text_id = f"{path_id}n"
@@ -207,15 +118,36 @@ def scale_svg(input_svg: str,
         if text_el is None:
             continue
 
-        new_size = 20 * math.sqrt(id_to_norm_ev[path_id])
+        inner_text = text_el.text
+        if inner_text is None:
+            continue
+
+        new_england = re.match(r'^[A-Za-z]{2}', inner_text)
+        if new_england:
+            inner_text = inner_text[:3]
+        else:
+            inner_text = ""
+
+        inner_text += str(id_to_ev[path_id])
+        text_el.text = str(inner_text)
+
+        text_scale = math.sqrt(id_to_norm_ev[path_id])
+        base_size = 20
+        new_size = base_size * text_scale
+        digit_len = len(str(id_to_ev[path_id]))
+        new_width = (new_size / 2) * digit_len
 
         text_el.set('font-size', str(new_size))
-        text_el.set('x', str(cx - new_size / 2))
-        text_el.set('y', str(cy + new_size / 2))
+        text_el.set('stroke', '#325081')
+        text_el.set('fill', '#edf1f8')
 
-        inner_text = text_el.text
-        inner_text = id_to_ev[path_id]
-        text_el.text = str(inner_text)
+        if not new_england:
+            text_el.set('x', str(cx - new_width / 2))
+            text_el.set('y', str(cy + new_size / 2.5))
+            text_el.set('stroke-width', f'{0.5 * text_scale}')
+        else:
+            text_el.set('font-size', str(base_size * 0.8))
+            text_el.set('stroke-width', f'{0.5}')
 
     # write out the modified SVG
     tree.write(output_svg, encoding='utf-8', xml_declaration=True)
