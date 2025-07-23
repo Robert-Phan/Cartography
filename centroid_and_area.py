@@ -2,27 +2,20 @@ from svgpathtools import svg2paths2, parse_path, Path
 from xml.etree import ElementTree as ET
 from typing import Iterator
 import os
+import svgpathtools.path as pathtools
 
-def path_centroid(path: Path, num_samples: int = 1000) -> complex:
-    points = [path.point(i / num_samples) for i in range(num_samples)]
-    area = 0
-    cx = 0
-    cy = 0
-    for i in range(len(points)):
-        x0, y0 = points[i].real, points[i].imag
-        x1, y1 = points[(i + 1) % len(points)].real, points[(i + 1) % len(points)].imag
-        cross = x0 * y1 - x1 * y0
-        area += cross
-        cx += (x0 + x1) * cross
-        cy += (y0 + y1) * cross
-    area *= 0.5
-    if area == 0:
-        raise ValueError("Degenerate path with zero area")
-    cx /= (6 * area)
-    cy /= (6 * area)
-    return complex(cx, cy)
+def centroid_of_multiple_paths(paths: list[Path], epsilon: float = 0) -> complex | None:
+    combined_d = ""
 
-def centroid_of_path_element(full_path: Path, epsilon: float = 0) -> complex | None:
+    for path in paths:
+        d: str = path.d() #type:ignore
+        combined_d += d
+    
+    combined_path = parse_path(combined_d)
+
+    return centroid_of_path(combined_path, epsilon)
+
+def centroid_of_path(full_path: Path, epsilon: float = 0) -> complex | None:
     """
     Returns the area-weighted centroid of all closed continuous subpaths
     in the given <path> element. Returns None if no closed subpaths exist.

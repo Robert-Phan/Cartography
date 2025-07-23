@@ -1,1 +1,7 @@
 venv/
+outputs/
+base/
+
+output*.svg
+*output.svg
+__pycache__/
